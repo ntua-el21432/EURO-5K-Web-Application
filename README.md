@@ -58,7 +58,6 @@ To execute the software using the provided [Dockerfile](Dockerfile), clone/downl
 
 ```
 docker build \
-  --build-arg HF_TOKEN="your_token" \
   --build-arg LANGS="XXX" \
   -t <choose name> .
 ```
