@@ -1,0 +1,6 @@
+src-api/venv
+src-api/models
+src-api/__pycache__
+src-ui/node_modules/
+src-ui/dist
+.git

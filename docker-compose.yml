@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  repobl-app:
+    image: euro5k-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        LANGS: ${LANGS}
+
+    container_name: euro5k_container
+
+    volumes:
+      - hf_model_cache:/code/models
+
+    ports:
+      - "5939:5939"
+
+    environment:
+      - AUTH_TOKEN=${AUTH_TOKEN}
+      - PYTHONUNBUFFERED=1
+
+    restart: unless-stopped
+    networks:
+      - research_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5939/api/models"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  hf_model_cache:
+networks:
+  research_net:

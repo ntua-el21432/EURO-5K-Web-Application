@@ -1,0 +1,5 @@
+venv/
+src-api/models/
+__pycache__/
+.env
+src-ui/node_modules/

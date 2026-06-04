@@ -1,0 +1,9 @@
+{
+"bert_base_fft": "bert_base_fft",
+"bert_eurlex_fft": "bert_eurlex_fft",
+"bert_base_lora": "bert_base_lora",
+"bert_eurlex_lora": "bert_eurlex_lora",
+"mistral": "mistral", 
+"llama": "llama",
+"saul": "saul"
+}

@@ -1,0 +1,25 @@
+#keep the cpu flag if deploying on cpu, else remove it
+--extra-index-url https://download.pytorch.org/whl/cpu
+fastapi==0.95.2
+uvicorn==0.22.0
+python-dotenv==1.0.0
+pydantic
+requests
+
+torch
+transformers>=4.34.0
+safetensors 
+accelerate
+peft
+
+#bitsandbytes
+#unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
+
+spacy>=3.0.0
+lime
+scikit-learn
+numpy
+
+#sentencepiece
+#protobuf
+#tqdm

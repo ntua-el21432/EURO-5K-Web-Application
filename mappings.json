@@ -1,0 +1,12 @@
+{
+"bert_fft": "bert_fft_model",
+"bert_base_fft": "bert_base_fft",
+"bert_base_lora": "bert_base_lora",
+"bert_eurlex_fft": "bert_eurlex_fft",
+"bert_eurlex_lora": "bert_eurlex_lora",
+"bert_base_lora_merged": "bert_base_lora_merged",
+"bert_eurlex_lora_merged": "bert_eurlex_lora_merged",
+"mistral": "mistral", 
+"llama": "llama",
+"saul": "saul"
+}
