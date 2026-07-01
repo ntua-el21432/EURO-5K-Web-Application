@@ -59,6 +59,43 @@ POSITIVE_LABEL = "LABEL_1"
 OBLIGATION_LABELS = ["B-RO", "I-RO"]
 NER_MODELS = ["bert_base_fft", "bert_eurlex_fft", "bert_base_lora", "bert_eurlex_lora"]
 
+#HELPERS
+def parse_obligation2(text: str) -> str | None:
+    #parser for Saul/Mistral outputs matching evaluation script
+    text = text.strip()
+    text_lower = text.lower()
+
+    negative_phrases = [
+        "none", "no obligation", "no reporting", "there is no", "does not contain",
+        "no requirement", "not a reporting obligation", "nothing"
+    ]
+    if any(phrase in text_lower for phrase in negative_phrases):
+        return None
+
+    prefixes = [
+        "the reporting obligation is:", "reporting obligation:", "obligation:",
+        "the obligation is:", "extracted obligation:", "sentence containing the obligation:"
+    ]
+    for p in prefixes:
+        if text_lower.startswith(p):
+            text = text[len(p):].strip()
+            break
+
+    cleaned = text.strip('\"\'.,;:[](){}').strip()
+    return cleaned if len(cleaned) > 20 else None
+
+
+def parse_llama_simple(response: str) -> str | None:
+    #Conservative Llama parser from evaluation script: checks primary output bounds
+    # Split potential junk token sequences safely
+    clean = response.split('')[0].strip()
+
+    # If primary response context implies negation, respect it
+    if 'none' in clean.lower()[:30]:
+        return None
+
+    return clean if len(clean) > 20 else None
+
 # LIME parameters
 NUM_LIME_SAMPLES = 2000
 NUM_FEATURES = 50
@@ -453,12 +490,23 @@ async def post_data(request: TextRequest, Token: str = Header(None, convert_unde
         device_model = raw_model["device"]
 
         for i, sentence in enumerate(sentences):
-            inputs = tokenizer(sentence, return_tensors="pt", truncation=True, max_length=512, padding=True).to(device_model)
+            inputs = tokenizer(
+                sentence,
+                return_tensors="pt",
+                truncation=True,
+                max_length=512,
+                padding=True,
+                return_overflowing_tokens=True,
+                stride=50
+            )
+            inputs.pop("overflow_to_sample_mapping", None)
+            inputs = {k: v.to(device_model) for k, v in inputs.items()}
             with torch.no_grad():
                 outputs = model(**inputs)
                 probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
-                token_probs = probs[0]
-                b_ro_score = token_probs[:, model.config.label2id["B-RO"]].max().item()
+                b_ro_id = model.config.label2id["B-RO"]
+                b_ro_score = probs[:, :, b_ro_id].max().item()
+
             is_obligation = b_ro_score > request.threshold
             good_predictions.append({
                 "sentence_index": i,
@@ -467,24 +515,92 @@ async def post_data(request: TextRequest, Token: str = Header(None, convert_unde
                 "score": float(b_ro_score)
             })
     else:
-        all_predictions = classifier(sentences)
+        model = raw_model["model"]
+        tokenizer = raw_model["tokenizer"]
+        device_model = raw_model["device"]
 
-        for i, preds in enumerate(all_predictions):
-            is_obligation = False
-            score = 0.0
-            loop_preds = preds if isinstance(preds, list) else [preds]
-            for p in loop_preds:
-                if p['label'] == POSITIVE_LABEL:
-                    score = p['score']
-                    if score > request.threshold:
-                        is_obligation = True
-                    break
+        SYSTEM_INSTRUCTION = (
+            "You are a legal expert analyzing EU legislation.\n"
+            "Task: Extract any reporting obligations from the provided text.\n"
+            "Definition: A reporting obligation is a mandatory legal requirement for "
+            "an entity (e.g. operator, Member State, or authority) to submit specific "
+            "information to a regulatory or oversight authority for purposes of "
+            "supervision, enforcement, or regulatory coordination.\n"
+            "Not reporting obligations (exclude these):\n"
+            "• Applications or requests (e.g. “submit an application”)\n"
+            "• Preparatory documentation (e.g. “submit a monitoring plan”)\n"
+            "• Financial requests (e.g. “submit payment claims”)\n"
+            "• Template-only rules (e.g. “shall use the template”)\n"
+            "• Authority-to-public notifications (e.g. “shall publish the report”)\n"
+            "Output Format:\n"
+            "• If obligation exists: Output the exact sentence(s) containing it\n"
+            "• If no obligation: Respond with exactly \"None\""
+        )
+        m_key_lower = model_key.lower()
+        if "llama" in m_key_lower:
+            terminators = [
+                tokenizer.convert_tokens_to_ids("<|end_of_text|>"),
+                tokenizer.convert_tokens_to_ids("<|eot_id|>")
+            ]
+        elif "saul" in m_key_lower or "mistral" in m_key_lower:
+            terminators = [tokenizer.eos_token_id]
+        else:
+            terminators = tokenizer.eos_token_id
+
+        for i, sentence in enumerate(sentences):
+            if "llama" in m_key_lower:
+                batch_messages = [
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": f"Text: {sentence}"}
+                ]
+            else:
+                # Saul/Mistral: System embedded in the user prompt to fit [INST] requirements
+                batch_messages = [
+                    {"role": "user", "content": f"{SYSTEM_INSTRUCTION}\n\nText: {sentence}"}
+                ]
+            prompt = tokenizer.apply_chat_template(batch_messages, tokenize=False, add_generation_prompt=True)
+            inputs = tokenizer(prompt, return_tensors="pt").to(device_model)
+            prompt_length = inputs.input_ids.shape[1]
+
+            with torch.no_grad():
+                generation_output = model.generate(
+                    **inputs,
+                    max_new_tokens=384,
+                    temperature=0.0,
+                    do_sample=False,
+                    pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                    eos_token_id=terminators,  # Inject correct model-specific structural terminators
+                    output_scores=True,
+                    return_dict_in_generate=True
+                )
+            generated_tokens = generation_output.sequences[0][prompt_length:]
+            response = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+
+            # Use script parser rules to determine validity
+            if "llama" in m_key_lower:
+                parsed_obligation = parse_llama_simple(response)
+            else:
+                parsed_obligation = parse_obligation2(response)
+
+            is_obligation = parsed_obligation is not None
+            final_extracted_text = parsed_obligation if is_obligation else "None"
+
+            token_probabilities = []
+            if hasattr(generation_output, "scores") and generation_output.scores:
+                step_probs = [torch.nn.functional.softmax(score[0], dim=-1) for score in generation_output.scores]
+
+                for step_idx, token_id in enumerate(generated_tokens):
+                    if step_idx < len(step_probs):
+                        token_probabilities.append(step_probs[step_idx][token_id].item())
+
+            confidence_score = sum(token_probabilities) / len(token_probabilities) if token_probabilities else 0.0
 
             good_predictions.append({
                 "sentence_index": i,
-                "text": sentences[i],
+                "text": sentence,
                 "is_reporting_obligation": is_obligation,
-                "score": score
+                "score": float(confidence_score),
+                "extracted_text": final_extracted_text
             })
 
     obligation_count = sum(1 for p in good_predictions if p['is_reporting_obligation'])
@@ -503,8 +619,6 @@ async def explain_prediction(request: ExplainRequest, Token: str = Header(None, 
 
     text = request.text.strip()
     model_key = request.model
-    config = MODEL_CONFIGURATIONS.get(model_key)
-    task_type = config.get('task', 'text-classification')
 
     if model_key in NER_MODELS:
         wrapper = BERTClassifierWrapper(
@@ -544,7 +658,6 @@ async def explain_prediction(request: ExplainRequest, Token: str = Header(None, 
 async def export_rdf(request: ExportRequest, Token: str = Header(None, convert_underscores=False)):
     if environ.get("AUTH_TOKEN") and Token != environ.get("AUTH_TOKEN"):
         raise HTTPException(status_code=500, detail="Wrong token header")
-
     obligations = [p for p in request.predictions if p.get('is_reporting_obligation')]
     if not obligations:
         raise HTTPException(status_code=400, detail="No obligations found to export.")

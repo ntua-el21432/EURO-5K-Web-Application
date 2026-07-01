@@ -37,7 +37,7 @@ echo "Installing languages: ${okLangs[@]}"
 for l in ${okLangs[@]}; do
     modelName=${langMappings[$l]}
     echo "Installing model for ${langMappings[$l]^}"
-    curl -L -f -H --output "${modelName}.tar.gz" "https://huggingface.co/bill-kotronis/reporting_obligations_thesis_models/resolve/main/${modelName}.tar.gz?download=true"
+    curl -L -f --output "${modelName}.tar.gz" "https://huggingface.co/bill-kotronis/reporting_obligations_thesis_models/resolve/main/${modelName}.tar.gz?download=true"
     mkdir -p "${modelName}"
     tar xzf "${modelName}.tar.gz" -C "${modelName}" --strip-components=2
     rm "${modelName}.tar.gz"
